@@ -1,8 +1,16 @@
-
 name: Typhoon Alert
 
 on:
   workflow_dispatch:
+    inputs:
+      test_line:
+        description: "是否傳送 LINE 私訊測試"
+        required: true
+        type: choice
+        options:
+          - "false"
+          - "true"
+        default: "false"
   schedule:
     # 每週四台灣時間 21:00（UTC 13:00）
     - cron: "0 13 * * 4"
@@ -26,3 +34,10 @@ jobs:
         env:
           CWA_API_KEY: ${{ secrets.CWA_API_KEY }}
         run: python -u typhoon_alert.py
+        
+      - name: Test LINE private message
+        if: ${{ inputs.test_line == 'true' }}
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: python -c "from typhoon_alert import send_line_message; send_line_message('【颱風通知測試】LINE 私訊推播成功。這是一則測試訊息，不是實際颱風警報。')"
