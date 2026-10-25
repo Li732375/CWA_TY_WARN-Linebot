@@ -116,3 +116,59 @@ jobs:
               print(f"Write test failed: HTTP {error.code}")
               raise SystemExit(1)
           PY
+
+      - name: Test workflow file write permission
+        env:
+          GH_TOKEN: ${{ secrets.WORKFLOW_UPDATE_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import os
+          import json
+          import base64
+          import urllib.request
+          import urllib.error
+
+          repo = os.environ["REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          path = ".github/workflows/token-permission-test.yml"
+
+          content = (
+              "name: Temporary Token Permission Test\n"
+              "on:\n"
+              "  workflow_dispatch:\n"
+              "jobs:\n"
+              "  test:\n"
+              "    runs-on: ubuntu-latest\n"
+              "    steps:\n"
+              "      - run: echo Permission test only\n"
+          )
+
+          url = f"https://api.github.com/repos/{repo}/contents/{path}"
+          body = {
+              "message": "Test workflow file write permission",
+              "content": base64.b64encode(
+                  content.encode("utf-8")
+              ).decode("ascii"),
+              "branch": "main",
+          }
+
+          request = urllib.request.Request(
+              url,
+              data=json.dumps(body).encode("utf-8"),
+              method="PUT",
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": "application/json",
+              },
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  print(f"Workflow file write HTTP status: {response.status}")
+          except urllib.error.HTTPError as error:
+              print(f"Workflow file write failed: HTTP {error.code}")
+              raise SystemExit(1)
+          PY
