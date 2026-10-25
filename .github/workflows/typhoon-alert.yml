@@ -21,5 +21,22 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check Python
-        run: python --version
+      - name: Check Python and secrets
+        env:
+          CWA_API_KEY: ${{ secrets.CWA_API_KEY }}
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: |
+          python --version
+          python - <<'PY'
+          import os
+          names = [
+              "CWA_API_KEY",
+              "LINE_CHANNEL_ACCESS_TOKEN",
+              "LINE_USER_ID",
+          ]
+          for name in names:
+              print(f"{name}: {'configured' if os.getenv(name) else 'MISSING'}")
+          if any(not os.getenv(name) for name in names):
+              raise SystemExit("One or more required secrets are missing.")
+          PY
