@@ -153,17 +153,21 @@ def get_current_alert(api_data):
         except ValueError:
             pass
 
+    next_warning_time_available = False
     try:
         js_text = fetch_text(CWA_TY_WARN_DATA_URL)
+        # 能成功讀取 JS 即代表資料來源可用；NoteText=[] 是有效的「沒有預定時間」狀態。
+        next_warning_time_available = True
         next_time = parse_next_warning_time(js_text)
         print("下次警報時間解析結果：" + (next_time or "未解析到"))
-    
+
         if not next_time:
             match = re.search(r"NoteText.{0,500}", js_text, re.S)
             print("NoteText 資料片段：" + (match.group(0)[:500] if match else "找不到 NoteText"))
     except Exception as error:
         print(f"讀取下次預定發布時間失敗：{type(error).__name__}")
         next_time = ""
+        next_warning_time_available = False
 
     alert = {
         "title": info.get("headline", ""),
