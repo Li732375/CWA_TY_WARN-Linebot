@@ -37,10 +37,12 @@
 │       └── typhoon-alert.yml
 ├── data/
 │   └── state.json
+├── W-C0034-001_histroy_datas.json
 └── typhoon_alert.py
 ```
 
-`data/state.json` 用來保存通知狀態，避免重複推播。若檔案尚未建立，程式會以空狀態開始。
+* `data/state.json` 用來保存通知狀態，避免重複推播。若檔案尚未建立，程式會以空狀態開始。
+* `W-C0034-001_histroy_datas.json` 是多筆相異日期的 API 歷史回傳 `json` 數據，內含有颱風到無颱風的格式變化。
 
 ## 必要設定
 
