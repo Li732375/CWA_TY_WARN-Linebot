@@ -17,6 +17,7 @@ CWA_TY_WARN_DATA_URL = (
 )
 TAIPEI = ZoneInfo("Asia/Taipei")
 STATE_PATH = "data/state.json"
+WORKFLOW_PATH = ".github/workflows/typhoon-alert.yml"
 
 
 def fetch_text(url):
@@ -170,6 +171,7 @@ def get_current_alert(api_data):
         "dynamics": sections.get("颱風動態", ""),
         "warning_areas": sections.get("警戒區域及事項", ""),
         "next_warning_time": next_time,
+        "next_warning_time_available": next_warning_time_available,
         "url": info.get("web", ""),
         "report_number": report_number,
         "category": category,
@@ -290,6 +292,92 @@ def save_state_to_github(state):
         print(f"GitHub 狀態保存成功，HTTP {response.status}")
 
 
+
+def update_dynamic_schedule(alert):
+    """依氣象署下次預定發布時間更新 Workflow 的動態 cron。"""
+    import base64
+
+    token = os.environ.get("WORKFLOW_UPDATE_TOKEN")
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    if not token or not repository:
+        raise RuntimeError("缺少 WORKFLOW_UPDATE_TOKEN 或 GITHUB_REPOSITORY。")
+
+    # 若氣象署 JS 無法讀取，不更動現有排程；成功讀取但無時間時則移除動態排程。
+    if not alert.get("next_warning_time_available"):
+        print("未能確認氣象署下次發布時間；保留現有動態排程。")
+        return
+
+    cron_line = None
+    next_time = alert.get("next_warning_time", "")
+    if next_time and alert.get("category") != "END":
+        target = datetime.strptime(next_time, "%Y-%m-%d %H:%M").replace(tzinfo=TAIPEI)
+        now = datetime.now(TAIPEI)
+        if target > now:
+            target_utc = target.astimezone(ZoneInfo("UTC"))
+            # GitHub cron 不支援年份；以日/月/時/分觸發，執行後會由程式重新核對並更新。
+            cron = f"{target_utc.minute} {target_utc.hour} {target_utc.day} {target_utc.month} *"
+            cron_line = f'    - cron: "{cron}" # CWA_DYNAMIC_SCHEDULE'
+        else:
+            print("下次預定發布時間已到或已過，不新增動態排程。")
+
+    api_url = (
+        f"https://api.github.com/repos/{repository}"
+        f"/contents/{WORKFLOW_PATH}"
+    )
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    get_request = urllib.request.Request(api_url, headers=headers)
+    with urllib.request.urlopen(get_request, timeout=30) as response:
+        file_info = json.loads(response.read().decode("utf-8"))
+
+    current_content = base64.b64decode(file_info["content"]).decode("utf-8")
+    sha = file_info["sha"]
+
+    # 先移除上一次產生的動態排程，再按最新資料插入。
+    updated_content = re.sub(
+        r"(?m)^\s*-\s*cron:\s*.*# CWA_DYNAMIC_SCHEDULE\s*\n?",
+        "",
+        current_content,
+    )
+
+    if cron_line:
+        fixed_cron_pattern = r'(?m)^(\s+- cron: "0 13 \* \* 4".*)$'
+        if not re.search(fixed_cron_pattern, updated_content):
+            raise RuntimeError("找不到固定的每週四排程，未更新動態排程。")
+        updated_content = re.sub(
+            fixed_cron_pattern,
+            lambda match: match.group(1) + "\n" + cron_line,
+            updated_content,
+            count=1,
+        )
+
+    if updated_content == current_content:
+        print("GitHub Actions 動態排程沒有變更。")
+        return
+
+    body = {
+        "message": "Update CWA typhoon dynamic schedule",
+        "content": base64.b64encode(updated_content.encode("utf-8")).decode("ascii"),
+        "sha": sha,
+    }
+    put_request = urllib.request.Request(
+        api_url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={**headers, "Content-Type": "application/json"},
+        method="PUT",
+    )
+    with urllib.request.urlopen(put_request, timeout=30) as response:
+        print(f"GitHub Actions 動態排程更新成功，HTTP {response.status}")
+    if cron_line:
+        print(f"已設定動態 cron：{cron_line.strip()}")
+    else:
+        print("已移除動態排程；固定每週四排程保留。")
+
+
 def should_notify(alert, state):
     """判斷新報數、內容變更或首次解除警報是否需要通知。"""
     if not alert:
@@ -326,6 +414,12 @@ def main():
     if not alert:
         print("目前沒有可解析的颱風警報資料；不通知。")
         return
+
+    # 排程更新失敗不應阻止既有警報通知，因此只記錄錯誤並繼續執行。
+    try:
+        update_dynamic_schedule(alert)
+    except Exception as error:
+        print(f"更新動態排程失敗：{type(error).__name__}: {error}")
 
     state = load_state()
 
