@@ -34,9 +34,9 @@ jobs:
         env:
           CWA_API_KEY: ${{ secrets.CWA_API_KEY }}
         run: python -u typhoon_alert.py
-        
+            
       - name: Test LINE private message
-        if: ${{ inputs.test_line == 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_line == 'true' }}
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
