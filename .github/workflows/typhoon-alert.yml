@@ -1,4 +1,3 @@
-
 name: Typhoon Alert
 
 on:
@@ -42,6 +41,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           WORKFLOW_UPDATE_TOKEN: ${{ secrets.WORKFLOW_UPDATE_TOKEN }}
+          SCHEDULE_CRON: ${{ github.event.schedule }}
         run: python -u typhoon_alert.py
 
       - name: Test LINE private message
