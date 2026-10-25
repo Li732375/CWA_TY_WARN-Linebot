@@ -1,3 +1,4 @@
+
 name: Typhoon Alert
 
 on:
@@ -11,8 +12,9 @@ on:
           - "false"
           - "true"
         default: "false"
+
   schedule:
-    # 每週四台灣時間 21:00（UTC 13:00）
+    # 固定排程：每週四台灣時間 21:00（UTC 13:00）
     - cron: "0 13 * * 4"
 
 permissions:
@@ -21,6 +23,7 @@ permissions:
 jobs:
   typhoon-alert:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -38,8 +41,9 @@ jobs:
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_UPDATE_TOKEN: ${{ secrets.WORKFLOW_UPDATE_TOKEN }}
         run: python -u typhoon_alert.py
-   
+
       - name: Test LINE private message
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_line == 'true' }}
         env:
