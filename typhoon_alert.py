@@ -4,6 +4,7 @@ import json
 import hashlib
 import urllib.parse
 import urllib.request
+import urllib.error
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -29,6 +30,46 @@ def fetch_text(url):
 
 def fetch_json(url):
     return json.loads(fetch_text(url))
+
+
+LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
+
+def send_line_message(message):
+    """將訊息推送到指定的個人 LINE。"""
+    access_token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+    user_id = os.environ.get("LINE_USER_ID")
+
+    if not access_token or not user_id:
+        raise SystemExit(
+            "缺少 LINE_CHANNEL_ACCESS_TOKEN 或 LINE_USER_ID。"
+        )
+
+    payload = json.dumps({
+        "to": user_id,
+        "messages": [
+            {
+                "type": "text",
+                "text": message[:5000],
+            }
+        ],
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        LINE_PUSH_URL,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {access_token}",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            print(f"LINE 推播請求成功，HTTP {response.status}")
+    except urllib.error.HTTPError as error:
+        print(f"LINE 推播失敗，HTTP {error.code}")
+        raise
 
 
 def parse_sections(description):
