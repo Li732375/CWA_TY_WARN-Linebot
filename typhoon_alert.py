@@ -5,7 +5,7 @@ import hashlib
 import urllib.parse
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 CWA_API_URL = (
@@ -296,8 +296,21 @@ def save_state_to_github(state):
         print(f"GitHub 狀態保存成功，HTTP {response.status}")
 
 
+
+def _github_workflow_api_url(repository):
+    return f"https://api.github.com/repos/{repository}/contents/{WORKFLOW_PATH}"
+
+
+def _github_headers(token):
+    return {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
 def update_dynamic_schedule(alert):
-    """依氣象署下次預定發布時間更新 Workflow 的動態 cron。"""
+    """依氣象署下次預定時間更新 cron，並在註解保存完整 UTC 年份時間。"""
     import base64
 
     token = os.environ.get("WORKFLOW_UPDATE_TOKEN")
@@ -305,7 +318,7 @@ def update_dynamic_schedule(alert):
     if not token or not repository:
         raise RuntimeError("缺少 WORKFLOW_UPDATE_TOKEN 或 GITHUB_REPOSITORY。")
 
-    # 若氣象署 JS 無法讀取，不更動現有排程；成功讀取但無時間時則移除動態排程。
+    # JS 讀取失敗時保留現有排程；成功讀取但沒有時間時清除動態排程。
     if not alert.get("next_warning_time_available"):
         print("未能確認氣象署下次發布時間；保留現有動態排程。")
         return
@@ -317,34 +330,22 @@ def update_dynamic_schedule(alert):
         now = datetime.now(TAIPEI)
         if target > now:
             target_utc = target.astimezone(ZoneInfo("UTC"))
-            # GitHub cron 不支援年份；以日/月/時/分觸發，執行後會由程式重新核對並更新。
             cron = f"{target_utc.minute} {target_utc.hour} {target_utc.day} {target_utc.month} *"
-            cron_line = f'    - cron: "{cron}" # CWA_DYNAMIC_SCHEDULE'
+            target_marker = target_utc.strftime("%Y-%m-%dT%H:%M")
+            cron_line = f'    - cron: "{cron}" # CWA_DYNAMIC_SCHEDULE target_utc={target_marker}'
         else:
             print("下次預定發布時間已到或已過，不新增動態排程。")
 
-    api_url = (
-        f"https://api.github.com/repos/{repository}"
-        f"/contents/{WORKFLOW_PATH}"
-    )
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "Authorization": f"Bearer {token}",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-    get_request = urllib.request.Request(api_url, headers=headers)
-    with urllib.request.urlopen(get_request, timeout=30) as response:
+    api_url = _github_workflow_api_url(repository)
+    headers = _github_headers(token)
+    request = urllib.request.Request(api_url, headers=headers)
+    with urllib.request.urlopen(request, timeout=30) as response:
         file_info = json.loads(response.read().decode("utf-8"))
 
     current_content = base64.b64decode(file_info["content"]).decode("utf-8")
     sha = file_info["sha"]
-
-    # 先移除上一次產生的動態排程，再按最新資料插入。
     updated_content = re.sub(
-        r"(?m)^\s*-\s*cron:\s*.*# CWA_DYNAMIC_SCHEDULE\s*\n?",
-        "",
-        current_content,
+        r"(?m)^\s*-\s*cron:\s*.*# CWA_DYNAMIC_SCHEDULE.*\n?", "", current_content
     )
 
     if cron_line:
@@ -402,48 +403,73 @@ def should_notify(alert, state):
     )
 
 
+
 def should_run_for_schedule():
-    """動態 cron 觸發時，確認 UTC 日期與時間已到；手動及固定排程照常執行。"""
+    """動態排程核對完整 UTC 目標時間；手動及固定排程照常執行。"""
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     schedule_cron = os.environ.get("SCHEDULE_CRON", "").strip()
 
-    # 手動執行與非排程觸發不受動態排程時間門檻限制。
     if event_name != "schedule":
         return True
 
     fixed_cron = "0 13 * * 4"
-    if not schedule_cron or schedule_cron == fixed_cron:
+    if not schedule_cron:
+        # GitHub 未提供排程來源時採安全策略，不執行正式查詢。
+        print("缺少 SCHEDULE_CRON；為避免誤執行，略過本次查詢。")
+        return False
+    if schedule_cron == fixed_cron:
         return True
 
-    # 動態 cron 格式為「分 時 日 月 *」；若格式不符，採安全策略：略過。
-    fields = schedule_cron.split()
-    if len(fields) != 5 or fields[4] != "*":
-        print("無法辨識這次排程的 cron 格式；為避免提早執行，略過本次查詢。")
+    # 從 workflow 註解取得包含年份的目標時間，避免 cron 隔年重複觸發。
+    token = os.environ.get("WORKFLOW_UPDATE_TOKEN")
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    if not token or not repository:
+        print("缺少讀取動態排程目標所需的設定；略過本次查詢。")
         return False
 
     try:
-        minute, hour, day, month = map(int, fields[:4])
-    except ValueError:
-        print("動態 cron 含有非數字欄位；為避免提早執行，略過本次查詢。")
-        return False
-
-    now_utc = datetime.now(ZoneInfo("UTC"))
-
-    # GitHub cron 不含年份；只在設定的 UTC 月、日執行，避免隔日補跑。
-    if now_utc.month != month or now_utc.day != day:
-        print(
-            f"這次是動態排程，但 UTC 日期尚未符合設定日期 "
-            f"({month:02d}-{day:02d})；略過本次查詢。"
+        request = urllib.request.Request(
+            _github_workflow_api_url(repository),
+            headers=_github_headers(token),
         )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            file_info = json.loads(response.read().decode("utf-8"))
+        import base64
+        workflow_text = base64.b64decode(file_info["content"]).decode("utf-8")
+    except Exception as error:
+        print(f"無法讀取動態排程目標：{type(error).__name__}；略過本次查詢。")
         return False
 
-    scheduled_minutes = hour * 60 + minute
-    current_minutes = now_utc.hour * 60 + now_utc.minute
-    if current_minutes < scheduled_minutes:
-        print("尚未到達動態排程時間；略過本次查詢。")
+    dynamic_lines = [
+        line for line in workflow_text.splitlines()
+        if "# CWA_DYNAMIC_SCHEDULE" in line
+    ]
+    matching_lines = [
+        line for line in dynamic_lines
+        if re.search(r"cron:\s*[\"']" + re.escape(schedule_cron) + r"[\"']", line)
+    ]
+    if len(matching_lines) != 1:
+        print("這次排程無法唯一對應到動態 cron；略過本次查詢。")
         return False
 
-    print("動態排程時間門檻已通過，開始查詢氣象署資料。")
+    match = re.search(r"target_utc=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})", matching_lines[0])
+    if not match:
+        print("動態排程缺少完整年份的目標時間；略過本次查詢。")
+        return False
+
+    target_utc = datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M").replace(
+        tzinfo=ZoneInfo("UTC")
+    )
+    now_utc = datetime.now(ZoneInfo("UTC"))
+    if now_utc < target_utc:
+        print("尚未到達動態排程目標時間；略過本次查詢。")
+        return False
+    # 容許 GitHub 排程延遲最多 24 小時；超過即視為過期，避免隔年誤觸發。
+    if now_utc - target_utc > timedelta(hours=24):
+        print("動態排程已超過目標時間 24 小時；略過本次查詢。")
+        return False
+
+    print("動態排程完整日期與時間檢查通過，開始查詢氣象署資料。")
     return True
 
 
