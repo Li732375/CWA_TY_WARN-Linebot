@@ -296,7 +296,6 @@ def save_state_to_github(state):
         print(f"GitHub 狀態保存成功，HTTP {response.status}")
 
 
-
 def update_dynamic_schedule(alert):
     """依氣象署下次預定發布時間更新 Workflow 的動態 cron。"""
     import base64
@@ -403,7 +402,56 @@ def should_notify(alert, state):
     )
 
 
+def should_run_for_schedule():
+    """動態 cron 觸發時，確認 UTC 日期與時間已到；手動及固定排程照常執行。"""
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    schedule_cron = os.environ.get("SCHEDULE_CRON", "").strip()
+
+    # 手動執行與非排程觸發不受動態排程時間門檻限制。
+    if event_name != "schedule":
+        return True
+
+    fixed_cron = "0 13 * * 4"
+    if not schedule_cron or schedule_cron == fixed_cron:
+        return True
+
+    # 動態 cron 格式為「分 時 日 月 *」；若格式不符，採安全策略：略過。
+    fields = schedule_cron.split()
+    if len(fields) != 5 or fields[4] != "*":
+        print("無法辨識這次排程的 cron 格式；為避免提早執行，略過本次查詢。")
+        return False
+
+    try:
+        minute, hour, day, month = map(int, fields[:4])
+    except ValueError:
+        print("動態 cron 含有非數字欄位；為避免提早執行，略過本次查詢。")
+        return False
+
+    now_utc = datetime.now(ZoneInfo("UTC"))
+
+    # GitHub cron 不含年份；只在設定的 UTC 月、日執行，避免隔日補跑。
+    if now_utc.month != month or now_utc.day != day:
+        print(
+            f"這次是動態排程，但 UTC 日期尚未符合設定日期 "
+            f"({month:02d}-{day:02d})；略過本次查詢。"
+        )
+        return False
+
+    scheduled_minutes = hour * 60 + minute
+    current_minutes = now_utc.hour * 60 + now_utc.minute
+    if current_minutes < scheduled_minutes:
+        print("尚未到達動態排程時間；略過本次查詢。")
+        return False
+
+    print("動態排程時間門檻已通過，開始查詢氣象署資料。")
+    return True
+
+
 def main():
+    # 必須在呼叫氣象署 API 前檢查；動態排程不得提前查詢或推播。
+    if not should_run_for_schedule():
+        return
+
     api_key = os.environ.get("CWA_API_KEY")
     if not api_key:
         raise SystemExit("缺少 CWA_API_KEY。")
