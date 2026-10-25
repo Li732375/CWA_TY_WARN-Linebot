@@ -328,6 +328,7 @@ def main():
         return
 
     state = load_state()
+
     print("資料解析成功。")
     print(f"警報標題：{alert['title']}")
     print(f"發布時間：{alert['published_at']}")
@@ -335,18 +336,43 @@ def main():
     print(f"警報類別：{alert['category']}")
     print(f"下次預定發布時間：{alert['next_warning_time'] or '未提供'}")
 
-    if alert["category"] == "END":
-        if state.get("last_end_report") == alert["report_number"]:
-            print("解除警報已通知過；略過重複通知。")
-        else:
-            print("偵測到解除警報；目前僅預覽，不傳送 LINE。")
-    elif should_notify(alert, state):
-        print("偵測到新報數或內容變更；目前僅預覽，不傳送 LINE。")
-    else:
-        print("資料未變更；略過重複通知。")
+    report_number = alert["report_number"]
+    category = alert["category"]
 
+    if not report_number:
+        print("缺少警報報數，為避免錯誤通知，本次略過。")
+        return
+
+    if category == "END":
+        if state.get("last_end_report") == report_number:
+            print("此解除警報已通知過；略過重複通知。")
+            return
+        print("偵測到解除警報，準備傳送 LINE。")
+    else:
+        if not should_notify(alert, state):
+            print("資料未變更；略過重複通知。")
+            return
+        print("偵測到新警報或內容變更，準備傳送 LINE。")
+
+    message = build_message(alert)
     print("\n--- LINE 訊息預覽 ---\n")
-    print(build_message(alert))
+    print(message)
+
+    # 先傳送 LINE。失敗時會拋出例外，不更新通知狀態。
+    send_line_message(message)
+
+    # 只有推播成功後才更新狀態。
+    if category == "END":
+        state["last_end_report"] = report_number
+    else:
+        state["last_report_number"] = report_number
+        state["last_content_hash"] = content_hash(alert)
+
+    # 先寫入執行環境，再提交到 GitHub 儲存庫。
+    save_state(state)
+    save_state_to_github(state)
+
+    print("通知及狀態保存流程完成。")
 
 
 if __name__ == "__main__":
