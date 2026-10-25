@@ -16,7 +16,7 @@ on:
     - cron: "0 13 * * 4"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   typhoon-alert:
