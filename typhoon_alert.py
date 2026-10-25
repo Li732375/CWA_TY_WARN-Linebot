@@ -231,6 +231,65 @@ def save_state(state):
     os.replace(temporary_path, STATE_PATH)
 
 
+def save_state_to_github(state):
+    """將通知狀態保存回 GitHub repository。"""
+    import base64
+
+    token = os.environ.get("GITHUB_TOKEN")
+    repository = os.environ.get("GITHUB_REPOSITORY")
+
+    if not token or not repository:
+        raise RuntimeError("缺少 GITHUB_TOKEN 或 GITHUB_REPOSITORY。")
+
+    api_url = (
+        f"https://api.github.com/repos/{repository}"
+        f"/contents/{STATE_PATH}"
+    )
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    # 取得檔案目前的 SHA，更新既有檔案時必須提供。
+    request = urllib.request.Request(api_url, headers=headers)
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            file_info = json.loads(response.read().decode("utf-8"))
+            sha = file_info["sha"]
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            sha = None
+        else:
+            raise
+
+    content = json.dumps(
+        state, ensure_ascii=False, indent=2
+    ) + "\n"
+
+    body = {
+        "message": "Update typhoon alert notification state",
+        "content": base64.b64encode(
+            content.encode("utf-8")
+        ).decode("ascii"),
+    }
+
+    if sha:
+        body["sha"] = sha
+
+    request = urllib.request.Request(
+        api_url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={**headers, "Content-Type": "application/json"},
+        method="PUT",
+    )
+
+    with urllib.request.urlopen(request, timeout=30) as response:
+        print(f"GitHub 狀態保存成功，HTTP {response.status}")
+
+
 def should_notify(alert, state):
     """判斷新報數、內容變更或首次解除警報是否需要通知。"""
     if not alert:
